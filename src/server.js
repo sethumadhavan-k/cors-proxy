@@ -24,6 +24,10 @@ const STRIP_PREFIX = (process.env.STRIP_PREFIX || '').replace(/\/$/, '');
 const FORWARD_PATH = (process.env.FORWARD_PATH || 'true').toLowerCase() === 'true';
 const SECURE_PROXY = (process.env.SECURE_PROXY || 'true').toLowerCase() === 'true';
 const PROXY_TIMEOUT_MS = process.env.PROXY_TIMEOUT_MS ? Number(process.env.PROXY_TIMEOUT_MS) : 30_000;
+const DISABLE_CONTENT_TYPES = (process.env.DISABLE_CONTENT_TYPES || 'text/html')
+  .split(',')
+  .map((v) => v.trim().toLowerCase())
+  .filter(Boolean);
 
 // Logging
 app.use(morgan('tiny'));
@@ -87,6 +91,22 @@ app.options('*', (req, res) => {
   }
   res.status(204).end();
 });
+
+// Helper: determine if a Content-Type is disallowed
+function isContentTypeDisallowed(contentTypeHeader) {
+  if (!contentTypeHeader) return false;
+  const base = String(contentTypeHeader).split(';')[0].trim().toLowerCase();
+  for (const pattern of DISABLE_CONTENT_TYPES) {
+    if (!pattern) continue;
+    if (pattern.endsWith('/*')) {
+      const prefix = pattern.slice(0, -1); // keep trailing '/'
+      if (base.startsWith(prefix)) return true;
+    } else if (base === pattern) {
+      return true;
+    }
+  }
+  return false;
+}
 
 // Attempt to extract a full target URL embedded in the request path
 function tryExtractPathEmbeddedTarget(req) {
@@ -198,7 +218,8 @@ const proxy = httpProxy.createProxyServer({
   ignorePath: true,
   ws: true,
   proxyTimeout: PROXY_TIMEOUT_MS,
-  timeout: PROXY_TIMEOUT_MS
+  timeout: PROXY_TIMEOUT_MS,
+  selfHandleResponse: true
 });
 
 proxy.on('error', (err, req, res) => {
@@ -213,6 +234,40 @@ proxy.on('error', (err, req, res) => {
   try {
     res.end(JSON.stringify({ error: message, details: err.message }));
   } catch (_) {}
+});
+
+// Intercept upstream responses to optionally block disallowed content types or forward normally
+proxy.on('proxyRes', (proxyRes, req, res) => {
+  try {
+    const contentType = proxyRes.headers['content-type'] || '';
+    if (isContentTypeDisallowed(contentType)) {
+      // Drain upstream without sending body to client
+      try { proxyRes.resume(); } catch (_) {}
+      if (!res.headersSent) {
+        res.setHeader('Content-Type', 'application/json');
+      }
+      const status = 415;
+      try { res.writeHead(status); } catch (_) {}
+      try { res.end(JSON.stringify({ error: 'Blocked content type', contentType })); } catch (_) {}
+      return;
+    }
+
+    // Forward response headers/body, preserving our CORS headers set earlier
+    const headers = Object.assign({}, proxyRes.headers);
+    // Avoid upstream overriding our CORS headers
+    Object.keys(headers).forEach((k) => {
+      if (/^access-control-/i.test(k)) delete headers[k];
+    });
+    try {
+      res.writeHead(proxyRes.statusCode, headers);
+    } catch (_) {}
+    proxyRes.pipe(res);
+  } catch (e) {
+    try {
+      if (!res.headersSent) res.writeHead(502);
+      res.end(JSON.stringify({ error: 'Bad Gateway: proxy response handling failed' }));
+    } catch (_) {}
+  }
 });
 
 // Forward everything
