@@ -134,7 +134,16 @@
           In browsers, percent-encode the full URL:
           <pre><code id="ex-encoded"></code></pre>
         </li>
+        <li>
+          <strong>Header override</strong> (enable <code>ALLOW_TARGET_HEADER=true</code>):
+          <pre><code id="ex-header"></code></pre>
+        </li>
+        <li>
+          <strong>Query override</strong> (enable <code>ALLOW_TARGET_QUERY=true</code>):
+          <pre><code id="ex-query"></code></pre>
+        </li>
       </ol>
+      <p class="note">Header and query overrides are disabled by default for safety; enable via environment variables if needed.</p>
     </section>
 
     <section class="card">
@@ -212,11 +221,15 @@
       var exDirect = document.getElementById('ex-direct');
       var exEncoded = document.getElementById('ex-encoded');
       var exCurl = document.getElementById('ex-curl');
+      var exHeader = document.getElementById('ex-header');
+      var exQuery = document.getElementById('ex-query');
       var target = 'https://api.example.com/v1/users?active=true';
       var encoded = encodeURIComponent(target);
       if (exDirect) exDirect.textContent = origin + '/https://api.example.com/v1/users?active=true';
       if (exEncoded) exEncoded.textContent = origin + '/' + encoded;
       if (exCurl) exCurl.textContent = 'curl "' + origin + '/https://httpbin.org/anything?x=1"';
+      if (exHeader) exHeader.textContent = 'curl -H "x-target-url: ' + target + '" ' + origin + '/anything';
+      if (exQuery) exQuery.textContent = origin + '/anything?url=' + encoded;
     })();
     (function(){
       // Configure social links from server-provided env
